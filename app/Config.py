@@ -43,7 +43,7 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost
 # ──────────────────────────────────────────────
 # Rate limiting
 # ──────────────────────────────────────────────
-RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", 100))
+RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", 500))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", 60))
 
 # ──────────────────────────────────────────────
@@ -60,5 +60,5 @@ BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", 12))
 # ──────────────────────────────────────────────
 # Upload rate limiting
 # ──────────────────────────────────────────────
-UPLOAD_RATE_LIMIT = int(os.getenv("UPLOAD_RATE_LIMIT", 10))
-UPLOAD_RATE_WINDOW_SECONDS = int(os.getenv("UPLOAD_RATE_WINDOW_SECONDS", 3600))
+UPLOAD_RATE_LIMIT = int(os.getenv("UPLOAD_RATE_LIMIT", 60))
+UPLOAD_RATE_WINDOW_SECONDS = int(os.getenv("UPLOAD_RATE_WINDOW_SECONDS", 60))
