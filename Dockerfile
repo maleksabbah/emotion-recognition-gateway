@@ -1,6 +1,6 @@
 # EmotionRecognitionGateway
-# FastAPI: JWT auth, WebSocket, CORS, rate limiting, request logging
-# Talks to: Redis, PostgreSQL (gateway_db), Orchestrator (HTTP)
+# FastAPI: JWT auth, CORS, rate limiting, proxy to orchestrator/storage
+# Talks to: Redis, PostgreSQL (gateway_db), Orchestrator (HTTP), Storage (HTTP)
 # Port: 8000
 
 FROM python:3.11-slim
@@ -9,6 +9,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    build-essential \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

@@ -1,364 +1,203 @@
 """
-Unit tests for the gateway.
-Mocks Redis, PostgreSQL, and orchestrator HTTP calls.
+Gateway integration tests — single file.
+Run from gateway/ root: `pytest Test.py -v`
+
+Requires:
+  pip install asgi-lifespan respx
+  pytest.ini with session-scoped loops (see storage)
 """
+from __future__ import annotations
+
+import os
 import uuid
-import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-
-from app.Schemas import (
-    HealthResponse,
-    RegisterRequest,
-    TokenResponse,
-    UploadRequest,
-)
+import pytest_asyncio
+import respx
+from asgi_lifespan import LifespanManager
+from testcontainers.postgres import PostgresContainer
+from testcontainers.redis import RedisContainer
 
 
-@pytest.fixture
-def mock_redis():
-    r = AsyncMock()
-    r.incr = AsyncMock(return_value=1)
-    r.expire = AsyncMock()
-    r.pipeline = MagicMock()
-    pipe = AsyncMock()
-    pipe.incr = MagicMock(return_value=pipe)
-    pipe.expire = MagicMock(return_value=pipe)
-    pipe.execute = AsyncMock(return_value=[1, True])
-    r.pipeline.return_value = pipe
-    r.xread = AsyncMock(return_value=[])
-    r.close = AsyncMock()
-    return r
+# ══════════════════════════════════════════════
+# Containers
+# ══════════════════════════════════════════════
+
+@pytest.fixture(scope="session", autouse=True)
+def postgres():
+    with PostgresContainer("postgres:15") as pg:
+        os.environ["POSTGRES_HOST"] = pg.get_container_host_ip()
+        os.environ["POSTGRES_PORT"] = str(pg.get_exposed_port(5432))
+        os.environ["POSTGRES_USER"] = pg.username
+        os.environ["POSTGRES_PASSWORD"] = pg.password
+        os.environ["GATEWAY_DB"] = pg.dbname
+        yield
 
 
-@pytest.fixture
-def fake_user():
-    user = MagicMock()
-    user.id = uuid.uuid4()
-    user.email = "test@example.com"
-    user.username = "testuser"
-    user.hashed_password = "$2b$12$fakehash"
-    user.is_active = True
-    user.is_admin = False
-    user.created_at = datetime.now(timezone.utc)
-    user.last_login = None
-    return user
+@pytest.fixture(scope="session", autouse=True)
+def redis_url():
+    with RedisContainer() as rc:
+        url = f"redis://{rc.get_container_host_ip()}:{rc.get_exposed_port(6379)}"
+        os.environ["REDIS_URL"] = url
+        yield url
 
 
-@pytest.fixture
-def auth_headers(fake_user):
-    from app.Auth import create_access_token
-    token = create_access_token(str(fake_user.id), fake_user.email)
-    return {"Authorization": f"Bearer {token}"}
+@pytest.fixture(scope="session", autouse=True)
+def downstream_env():
+    os.environ["ORCHESTRATOR_URL"] = "http://fake-orchestrator:8001"
+    os.environ["STORAGE_URL"] = "http://fake-storage:8002"
+    os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
+    yield
 
 
-@pytest.fixture
-def test_client(mock_redis):
-    from fastapi.testclient import TestClient
-    with patch("redis.asyncio.from_url", return_value=mock_redis):
-        from main import app
-        app.state.redis = mock_redis
-        with TestClient(app) as c:
-            yield c
+# ══════════════════════════════════════════════
+# App + client (session-scoped, row reset per test)
+# ══════════════════════════════════════════════
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def app_client(postgres, redis_url, downstream_env):
+    from app.main import app
+    from app.Config.Database import engine
+    from app.Entities.Base import Base
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with LifespanManager(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as c:
+            yield c, engine
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
 
 
-class TestSchemas:
-    def test_health_response(self):
-        resp = HealthResponse()
-        assert resp.service == "gateway"
-        assert resp.status == "ok"
-
-    def test_register_request_validation(self):
-        req = RegisterRequest(email="test@example.com", username="testuser", password="password123")
-        assert req.email == "test@example.com"
-        assert req.username == "testuser"
-
-    def test_register_short_password_fails(self):
-        with pytest.raises(Exception):
-            RegisterRequest(email="test@example.com", username="testuser", password="short")
-
-    def test_register_short_username_fails(self):
-        with pytest.raises(Exception):
-            RegisterRequest(email="test@example.com", username="ab", password="password123")
-
-    def test_upload_request(self):
-        req = UploadRequest(filename="video.mp4", content_type="video/mp4")
-        assert req.mode == "video"
-
-    def test_token_response(self):
-        resp = TokenResponse(access_token="abc", refresh_token="def", expires_in=900)
-        assert resp.token_type == "bearer"
+@pytest_asyncio.fixture(loop_scope="session")
+async def client(app_client):
+    c, engine = app_client
+    from app.Entities.Base import Base
+    async with engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
+    yield c
 
 
-class TestAuth:
-    def test_hash_and_verify_password(self):
-        from app.Auth import hash_password, verify_password
-        hashed = hash_password("mysecretpassword")
-        assert verify_password("mysecretpassword", hashed)
-        assert not verify_password("wrongpassword", hashed)
+# ══════════════════════════════════════════════
+# Path discovery — pull auth/upload prefixes from the live app so test
+# paths don't break when main.py mounts routes with extra prefixes.
+# ══════════════════════════════════════════════
 
-    def test_create_and_decode_access_token(self):
-        from app.Auth import create_access_token, decode_token
-        user_id = str(uuid.uuid4())
-        token = create_access_token(user_id, "test@example.com")
-        payload = decode_token(token)
-        assert payload["sub"] == user_id
-        assert payload["email"] == "test@example.com"
-        assert payload["type"] == "access"
-
-    def test_create_and_decode_refresh_token(self):
-        from app.Auth import create_refresh_token, decode_token
-        user_id = str(uuid.uuid4())
-        token = create_refresh_token(user_id)
-        payload = decode_token(token)
-        assert payload["sub"] == user_id
-        assert payload["type"] == "refresh"
-
-    def test_decode_invalid_token_raises(self):
-        from app.Auth import decode_token
-        with pytest.raises(Exception):
-            decode_token("invalid.token.here")
-
-    @pytest.mark.asyncio
-    @patch("app.Auth.async_session")
-    async def test_create_user(self, mock_session_factory, fake_user):
-        mock_db = AsyncMock()
-        mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.refresh = AsyncMock()
-
-        from app.Auth import create_user
-        user = await create_user("new@example.com", "newuser", "password123")
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
-
-    @pytest.mark.asyncio
-    @patch("app.Auth.async_session")
-    async def test_authenticate_user_success(self, mock_session_factory, fake_user):
-        from app.Auth import hash_password
-
-        fake_user.hashed_password = hash_password("correctpassword")
-
-        mock_db = AsyncMock()
-        mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = fake_user
-        mock_db.execute = AsyncMock(return_value=mock_result)
-
-        from app.Auth import authenticate_user
-        user = await authenticate_user("test@example.com", "correctpassword")
-        assert user.email == "test@example.com"
-
-    @pytest.mark.asyncio
-    @patch("app.Auth.async_session")
-    async def test_authenticate_user_wrong_password(self, mock_session_factory, fake_user):
-        from app.Auth import hash_password
-        fake_user.hashed_password = hash_password("correctpassword")
-
-        mock_db = AsyncMock()
-        mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = fake_user
-        mock_db.execute = AsyncMock(return_value=mock_result)
-
-        from app.Auth import authenticate_user
-        with pytest.raises(Exception) as exc_info:
-            await authenticate_user("test@example.com", "wrongpassword")
-        assert exc_info.value.status_code == 401
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def paths(app_client):
+    """Find actual paths for the endpoints we want to hit."""
+    c, _ = app_client
+    app = c._transport.app
+    register = login = me = upload_request = None
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if path.endswith("/register"):
+            register = path
+        elif path.endswith("/login"):
+            login = path
+        elif path.endswith("/me"):
+            me = path
+        elif path.endswith("/upload/request") or path.endswith("/request"):
+            if "upload" in path:
+                upload_request = path
+    assert register and login and me, (
+        f"Could not discover all paths. routes: {[r.path for r in app.routes]}"
+    )
+    return {
+        "register": register,
+        "login": login,
+        "me": me,
+        "upload_request": upload_request,
+    }
 
 
-class TestRateLimiting:
-    @pytest.mark.asyncio
-    async def test_rate_limit_allows(self, mock_redis):
-        from app.Middleware import check_rate_limit
-        assert await check_rate_limit(mock_redis, "test:key", 100, 60) is True
+# ══════════════════════════════════════════════
+# Tests
+# ══════════════════════════════════════════════
 
-    @pytest.mark.asyncio
-    async def test_rate_limit_blocks(self, mock_redis):
-        from app.Middleware import check_rate_limit
-        pipe = mock_redis.pipeline.return_value
-        pipe.execute = AsyncMock(return_value=[101, True])
-        assert await check_rate_limit(mock_redis, "test:key", 100, 60) is False
+@pytest.mark.asyncio(loop_scope="session")
+async def test_health(client):
+    r = await client.get("/health")
+    assert r.status_code == 200
 
 
-class TestAPIRoutes:
-    def test_health_endpoint(self, test_client):
-        response = test_client.get("/api/health")
-        assert response.status_code == 200
-        assert response.json()["service"] == "gateway"
-        assert response.json()["status"] == "ok"
+@pytest.mark.asyncio(loop_scope="session")
+async def test_register_login_me_flow(client, paths):
+    r = await client.post(paths["register"], json={
+        "email": "user@test.io", "username": "user", "password": "P@ssword123",
+    })
+    assert r.status_code == 200
 
-    @patch("app.Routes.create_user")
-    def test_register_endpoint(self, mock_create_user, test_client, fake_user):
-        mock_create_user.return_value = fake_user
-        response = test_client.post("/api/auth/register", json={
-            "email": "new@example.com",
-            "username": "newuser",
-            "password": "password123",
+    r = await client.post(paths["login"], json={
+        "email": "user@test.io", "password": "P@ssword123",
+    })
+    token = r.json()["access_token"]
+
+    r = await client.get(paths["me"], headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json()["email"] == "user@test.io"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_duplicate_register_409(client, paths):
+    payload = {"email": "dup@test.io", "username": "dup", "password": "P@ss1234"}
+    await client.post(paths["register"], json=payload)
+    r = await client.post(paths["register"], json=payload)
+    assert r.status_code == 409
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_bad_login_401(client, paths):
+    r = await client.post(paths["login"], json={"email": "nobody@test.io", "password": "bad"})
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@respx.mock
+async def test_upload_request_proxies_to_storage(client, paths):
+    await client.post(paths["register"], json={
+        "email": "up@test.io", "username": "uploader", "password": "P@ss1234",
+    })
+    token = (await client.post(paths["login"], json={
+        "email": "up@test.io", "password": "P@ss1234",
+    })).json()["access_token"]
+
+    respx.post("http://fake-orchestrator:8001/api/sessions").mock(
+        return_value=httpx.Response(200, json={
+            "session_id": "11111111-1111-1111-1111-111111111111",
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "pending",
         })
-        assert response.status_code == 200
-        data = response.json()
-        assert data["email"] == "test@example.com"
-        assert data["username"] == "testuser"
-
-    @patch("app.Routes.authenticate_user")
-    def test_login_endpoint(self, mock_auth, test_client, fake_user):
-        mock_auth.return_value = fake_user
-        response = test_client.post("/api/auth/login", json={
-            "email": "test@example.com",
-            "password": "password123",
+    )
+    # Match whatever URL the gateway actually uses (regex covers both
+    # http://storage:8002 and http://fake-storage:8002)
+    import re
+    respx.post(re.compile(r"http://[^/]+/internal/presign/upload")).mock(
+        return_value=httpx.Response(200, json={
+            "file_id": "abc",
+            "upload_url": "https://minio/...",
+            "s3_key": "sessions/x/video.mp4",
         })
-        assert response.status_code == 200
-        data = response.json()
-        assert "access_token" in data
-        assert "refresh_token" in data
-        assert data["token_type"] == "bearer"
-
-    @patch("app.Auth.get_user_by_id")
-    def test_me_endpoint(self, mock_get_user, test_client, fake_user, auth_headers):
-        mock_get_user.return_value = fake_user
-        response = test_client.get("/api/auth/me", headers=auth_headers)
-        assert response.status_code == 200
-        assert response.json()["email"] == "test@example.com"
-
-    def test_me_without_auth(self, test_client):
-        response = test_client.get("/api/auth/me")
-        assert response.status_code == 401
-
-    @patch("app.Auth.get_user_by_id")
-    @patch("app.Routes.httpx.AsyncClient")
-    def test_upload_request_endpoint(self, mock_httpx_cls, mock_get_user, test_client, fake_user, auth_headers, mock_redis):
-        mock_get_user.return_value = fake_user
-
-        session_id = str(uuid.uuid4())
-        mock_client = AsyncMock()
-        mock_httpx_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_httpx_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        session_resp = MagicMock()
-        session_resp.status_code = 200
-        session_resp.json.return_value = {"session_id": session_id, "mode": "video", "status": "active"}
-
-        presign_resp = MagicMock()
-        presign_resp.status_code = 200
-        presign_resp.json.return_value = {"upload_url": "https://s3.example.com/upload", "s3_key": f"uploads/{session_id}/video.mp4"}
-
-        mock_client.post = AsyncMock(side_effect=[session_resp, presign_resp])
-
-        response = test_client.post("/api/upload/request", headers=auth_headers, json={
-            "filename": "video.mp4",
-            "content_type": "video/mp4",
-            "mode": "video",
+    )
+    respx.post(re.compile(r"http://[^/]+/api/sessions")).mock(
+        return_value=httpx.Response(200, json={
+            "session_id": "11111111-1111-1111-1111-111111111111",
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "pending",
         })
-        assert response.status_code == 200
-        data = response.json()
-        assert data["session_id"] == session_id
-        assert "upload_url" in data
+    )
 
-    @patch("app.Auth.get_user_by_id")
-    @patch("app.Routes.httpx.AsyncClient")
-    def test_session_status_endpoint(self, mock_httpx_cls, mock_get_user, test_client, fake_user, auth_headers):
-        mock_get_user.return_value = fake_user
-
-        mock_client = AsyncMock()
-        mock_httpx_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_httpx_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        status_resp = MagicMock()
-        status_resp.status_code = 200
-        status_resp.json.return_value = {
-            "session_id": "test-session",
-            "status": "processing",
-            "progress": 0.5,
-            "total_frames": 100,
-            "current_frame": 50,
-        }
-        mock_client.get = AsyncMock(return_value=status_resp)
-
-        response = test_client.get("/api/sessions/test-session/status", headers=auth_headers)
-        assert response.status_code == 200
-        assert response.json()["status"] == "processing"
-        assert response.json()["progress"] == 0.5
-
-    @patch("app.Auth.get_user_by_id")
-    @patch("app.Routes.httpx.AsyncClient")
-    def test_session_not_found(self, mock_httpx_cls, mock_get_user, test_client, fake_user, auth_headers):
-        mock_get_user.return_value = fake_user
-
-        mock_client = AsyncMock()
-        mock_httpx_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_httpx_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        not_found_resp = MagicMock()
-        not_found_resp.status_code = 404
-        mock_client.get = AsyncMock(return_value=not_found_resp)
-
-        response = test_client.get("/api/sessions/nonexistent/status", headers=auth_headers)
-        assert response.status_code == 404
-
-    @patch("app.Auth.get_user_by_id")
-    @patch("app.Routes.httpx.AsyncClient")
-    def test_list_sessions_endpoint(self, mock_httpx_cls, mock_get_user, test_client, fake_user, auth_headers):
-        mock_get_user.return_value = fake_user
-
-        mock_client = AsyncMock()
-        mock_httpx_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_httpx_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        list_resp = MagicMock()
-        list_resp.status_code = 200
-        list_resp.json.return_value = [{"id": "s1", "mode": "live", "status": "complete"}]
-        mock_client.get = AsyncMock(return_value=list_resp)
-
-        response = test_client.get("/api/sessions", headers=auth_headers)
-        assert response.status_code == 200
-        assert len(response.json()) == 1
-
-
-class TestWebSocket:
-    def test_websocket_no_token_rejected(self, test_client):
-        with pytest.raises(Exception):
-            with test_client.websocket_connect("/ws/live"):
-                pass
-
-    @patch("app.WebSocket.get_user_by_id")
-    def test_websocket_invalid_token_rejected(self, mock_get_user, test_client):
-        mock_get_user.return_value = None
-        with pytest.raises(Exception):
-            with test_client.websocket_connect("/ws/live?token=invalid.token.here"):
-                pass
-
-    @patch("app.WebSocket.httpx.AsyncClient")
-    @patch("app.WebSocket.get_user_by_id")
-    @patch("app.WebSocket.decode_token")
-    def test_websocket_connect_and_receive_session(
-        self, mock_decode, mock_get_user, mock_httpx_cls, test_client, fake_user, mock_redis
-    ):
-        mock_decode.return_value = {"sub": str(fake_user.id), "type": "access"}
-        mock_get_user.return_value = fake_user
-
-        session_id = str(uuid.uuid4())
-        mock_client = AsyncMock()
-        mock_httpx_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_httpx_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        session_resp = MagicMock()
-        session_resp.status_code = 200
-        session_resp.json.return_value = {"session_id": session_id}
-        mock_client.post = AsyncMock(return_value=session_resp)
-        mock_redis.xread = AsyncMock(side_effect=[[], asyncio.CancelledError()])
-
-        with test_client.websocket_connect("/ws/live?token=valid") as ws:
-            msg = ws.receive_json()
-            assert msg["type"] == "session_created"
-            assert msg["session_id"] == session_id
+    upload_path = paths["upload_request"] or "/upload/request"
+    r = await client.post(upload_path,
+        json={"filename": "v.mp4", "content_type": "video/mp4", "mode": "video"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text

@@ -1,51 +1,73 @@
 """
-Gateway — FastAPI application.
-Faces the frontend. Handles auth, rate limiting, WebSocket, proxies to orchestrator.
+Gateway entry point.
+
+Wires the FastAPI app:
+  - Lifespan: build the shared httpx client and Redis connection.
+  - CORS middleware.
+  - Domain exception handler.
+  - All routers mounted under /api (except /health at the root).
 """
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
 
-import redis.asyncio as aioredis
-from fastapi import FastAPI, WebSocket
+import httpx
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.Config import CORS_ORIGINS, REDIS_URL
-from app.Database import engine
-from app.ORM_Models import Base
-from app.Middleware import RequestLoggingMiddleware
-from app.Routes import router
-from app.WebSocket import websocket_live
+from app.Config import CORS_ORIGINS, get_redis
+from app.Exceptions import register_exception_handlers
+from app.Routes import (
+    auth_router,
+    health_router,
+    job_router,
+    upload_router,
+    user_router,
+)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
 logger = logging.getLogger("gateway")
 
 
+# ─── Lifespan ──────────────────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Build and tear down shared resources used by dependencies.
+
+    The httpx client is reused for every outbound call (orchestrator,
+    storage). The Redis connection is used by the rate-limit dependency.
+    Both are read off `app.state` in app/dependencies.py.
+    """
     logger.info("Starting gateway...")
 
-    # Create database tables (users, request_logs, etc.)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("  Database tables ready")
-
-    # Connect Redis
-    redis_conn = aioredis.from_url(REDIS_URL, decode_responses=False)
-    app.state.redis = redis_conn
-
+    app.state.http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0, connect=5.0),
+    )
+    app.state.redis = get_redis()
     logger.info("Gateway ready")
+
     yield
 
     logger.info("Shutting down...")
-    await redis_conn.close()
+    await app.state.http_client.aclose()
+    await app.state.redis.close()
     logger.info("Gateway stopped")
 
 
-app = FastAPI(title="Emotion Recognition Gateway", version="1.0.0", lifespan=lifespan)
+# ─── App ───────────────────────────────────────────────────────────────
 
-# CORS
+app = FastAPI(
+    title="Emotion Recognition Gateway",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -54,20 +76,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request logging
-app.add_middleware(RequestLoggingMiddleware)
+register_exception_handlers(app)
 
-# REST routes
-app.include_router(router, prefix="/api")
+# Health stays at the root path so Docker / nginx can hit /health directly.
+app.include_router(health_router)
 
-
-# WebSocket endpoint
-@app.websocket("/ws/live")
-async def ws_live(websocket: WebSocket):
-    await websocket_live(websocket)
-
-
-# Health check — root level, used by Docker health check
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "gateway"}
+# Everything else mounts under /api.
+app.include_router(auth_router, prefix="/api")
+app.include_router(user_router, prefix="/api")
+app.include_router(upload_router, prefix="/api")
+app.include_router(job_router, prefix="/api")
