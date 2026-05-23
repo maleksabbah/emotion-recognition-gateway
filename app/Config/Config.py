@@ -25,7 +25,8 @@ POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "emotion")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "emotion_dev")
 GATEWAY_DB = os.getenv("GATEWAY_DB", "gateway_db")
-GATEWAY_DB_URL = (
+# Honor DATABASE_URL if set (e.g. RDS); otherwise compose from the parts.
+GATEWAY_DB_URL = os.getenv("DATABASE_URL") or (
     f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
     f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{GATEWAY_DB}"
 )

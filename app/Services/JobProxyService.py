@@ -31,10 +31,12 @@ class JobProxyService:
     async def complete_upload(
         self, req: UploadCompleteRequest, user: User
     ) -> UploadCompleteResponse:
+        # Frontend posts the REAL s3_key it got from /upload/request — use it.
+        # Hardcoding a directory prefix here was crashing media-worker on S3 GET.
         data = await self.orchestrator.submit_upload_job(
             session_id=req.session_id,
-            mode="video",
-            s3_key=f"uploads/{req.session_id}/",
+            mode=req.mode or "video",
+            s3_key=req.s3_key,
         )
         return UploadCompleteResponse(
             status=data.get("status", "queued"),

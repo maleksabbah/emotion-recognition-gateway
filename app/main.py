@@ -2,7 +2,9 @@
 Gateway entry point.
 
 Wires the FastAPI app:
-  - Lifespan: build the shared httpx client and Redis connection.
+  - Lifespan: build the shared httpx client and Redis connection, plus
+              ensure the gateway_db schema exists (create_all for now;
+              alembic later when migrations are added).
   - CORS middleware.
   - Domain exception handler.
   - All routers mounted under /api (except /health at the root).
@@ -15,8 +17,10 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.Config import CORS_ORIGINS, get_redis
+from app.Config import CORS_ORIGINS, GATEWAY_DB_URL, get_redis
+from app.Entities import Base
 from app.Exceptions import register_exception_handlers
 from app.Routes import (
     auth_router,
@@ -43,8 +47,21 @@ async def lifespan(app: FastAPI):
     The httpx client is reused for every outbound call (orchestrator,
     storage). The Redis connection is used by the rate-limit dependency.
     Both are read off `app.state` in app/dependencies.py.
+
+    Schema is created via Base.metadata.create_all so a fresh deploy
+    works without manual psql. Once migrations exist this can be
+    swapped for alembic upgrade.
     """
     logger.info("Starting gateway...")
+
+    # Ensure schema before serving requests.
+    schema_engine = create_async_engine(GATEWAY_DB_URL)
+    try:
+        async with schema_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Schema ensured")
+    finally:
+        await schema_engine.dispose()
 
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(10.0, connect=5.0),

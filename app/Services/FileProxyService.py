@@ -44,7 +44,8 @@ class FileProxyService:
                 "content_type": req.content_type,
             },
         )
-        session_id = session["session_id"]
+        # Orchestrator returns JobResponse with key "id" (not "session_id").
+        session_id = session["id"]
 
         presign = await self.storage.presign_upload(
             session_id=session_id,
