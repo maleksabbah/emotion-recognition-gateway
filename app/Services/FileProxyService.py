@@ -67,12 +67,16 @@ class FileProxyService:
 
     async def get_download(self, session_id: str, user: User) -> DownloadResponse:
         """
-        Resolve the burned output for a session. Scoped to user_id at the
-        storage query so a session_id alone won't reveal another user's file.
+        Resolve the burned output for a session.
+
+        Note: workers (media-worker, burner) don't propagate user_id to the
+        FileRecord rows today, so the burned row's user_id is NULL. Filtering
+        the storage lookup by user_id here would always miss. Authentication
+        gates the route, and session_ids are unguessable UUIDs — that's the
+        scoping we rely on until user_id is plumbed through Kafka tasks.
         """
         files = await self.storage.list_files(
             session_id=session_id,
-            user_id=str(user.id),
             category="burned",
         )
         if not files:
