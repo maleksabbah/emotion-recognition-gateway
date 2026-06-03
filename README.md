@@ -26,11 +26,14 @@ one responsibility and depends only on the layer beneath it:
   services (`OrchestratorClient`, `StorageClient`) so the service
   layer never touches raw queries, redis, or HTTP clients directly.
 * **Entities** — the User ORM model and any auxiliary domain types.
+  The schema is managed with Alembic — migrations live under
+  `alembic/versions/` and run on startup via the FastAPI `lifespan`.
 * **Dtos** — request/response shapes (`RegisterRequest`,
   `LoginResponse`, `PresignRequest`, `SessionStatusResponse`, ...)
   kept separate from internal entities.
 * **Config** — wiring: SQLAlchemy session, Redis client, httpx client,
   JWT secret + algorithm + lifetimes, downstream service URLs.
+  Database schema is managed with Alembic migrations.
 
 This separation keeps the HTTP layer swappable, the business logic
 testable in isolation, and the data layer free to change without
