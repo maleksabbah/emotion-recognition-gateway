@@ -32,12 +32,14 @@ class FileProxyService:
 
     async def presign_upload(self, req: UploadRequest, user: User) -> UploadResponse:
         """
-        1. Orchestrator: create a session with the user's chosen mode.
+        1. Orchestrator: create a session with the correct mode (photo/video).
         2. Storage: pre-register the file row + sign a PUT URL.
         3. Return both — browser uses the URL, polls status with session_id.
         """
+        mode = "photo" if req.content_type.startswith("image/") else "video"
+
         session = await self.orchestrator.create_session(
-            mode=req.mode,
+            mode=mode,
             metadata={
                 "user_id": str(user.id),
                 "filename": req.filename,
