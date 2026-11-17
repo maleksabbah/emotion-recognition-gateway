@@ -7,5 +7,6 @@ models on Base.metadata so create_all sees the full table set.
 from app.Entities.Base import Base
 from app.Entities.User import User
 from app.Entities.RequestLog import RequestLog
+from app.Entities.RefreshToken import RefreshToken
 
-__all__ = ["Base", "User", "RequestLog"]
+__all__ = ["Base", "User", "RequestLog", "RefreshToken"]

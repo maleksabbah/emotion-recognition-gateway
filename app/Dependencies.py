@@ -27,6 +27,7 @@ from app.Repositories.UserRepository import UserRepository
 from app.Repositories.OrchestratorClient import OrchestratorClient
 from app.Repositories.StorageClient import StorageClient
 from app.Repositories.RedisRepository import RedisRepository
+from app.Repositories.RefreshTokenRepository import RefreshTokenRepository
 from app.Services.AuthService import AuthService
 from app.Services.UserService import UserService
 from app.Services.JobProxyService import JobProxyService
@@ -83,12 +84,19 @@ def get_redis_repo(
     return RedisRepository(conn)
 
 
+def get_refresh_token_repo(
+    session: AsyncSession = Depends(get_db_session),
+) -> RefreshTokenRepository:
+    return RefreshTokenRepository(session)
+
+
 # ─── Services ──────────────────────────────────────────────────────────
 
 def get_auth_service(
     users: UserRepository = Depends(get_user_repo),
+    refresh_tokens: RefreshTokenRepository = Depends(get_refresh_token_repo),
 ) -> AuthService:
-    return AuthService(users=users)
+    return AuthService(users=users, refresh_tokens=refresh_tokens)
 
 
 def get_user_service(

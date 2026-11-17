@@ -9,6 +9,8 @@ the central handler maps to HTTP.
 """
 from __future__ import annotations
 
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -41,11 +43,13 @@ from app.Exceptions import (
     UsernameAlreadyTaken,
 )
 from app.Repositories.UserRepository import UserRepository
+from app.Repositories.RefreshTokenRepository import RefreshTokenRepository
 
 
 class AuthService:
-    def __init__(self, users: UserRepository):
+    def __init__(self, users: UserRepository, refresh_tokens: RefreshTokenRepository):
         self.users = users
+        self.refresh_tokens = refresh_tokens
 
     # ══════════════════════════════════════════
     # Use cases
@@ -72,20 +76,46 @@ class AuthService:
             raise AccountDisabled()
 
         await self.users.update_last_login(user.id)
-        return self._issue_tokens(LoginResponse, user)
+
+        access = self._create_access_token(str(user.id), user.email)
+        raw_refresh, _ = await self._create_rotatable_refresh(user.id)
+        return LoginResponse(
+            access_token=access,
+            refresh_token=raw_refresh,
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
 
     async def refresh(self, req: RefreshRequest) -> RefreshResponse:
-        payload = self._decode_token(req.refresh_token)
-        if payload.get("type") != "refresh":
-            raise InvalidTokenType()
+        token_hash = hashlib.sha256(req.refresh_token.encode()).hexdigest()
+        record = await self.refresh_tokens.find_by_hash(token_hash)
 
-        user = await self.users.find_by_id(payload["sub"])
+        if not record:
+            raise InvalidToken()
+
+        if record.used:
+            # Theft detected — revoke the entire family.
+            await self.refresh_tokens.revoke_all_for_user(record.user_id)
+            raise InvalidToken("Refresh token reuse detected")
+
+        if record.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            raise TokenExpired()
+
+        # Mark current token as used before issuing a new one.
+        await self.refresh_tokens.mark_used(record.id)
+
+        user = await self.users.find_by_id(record.user_id)
         if not user:
             raise UserNotFound()
         if not user.is_active:
             raise AccountDisabled()
 
-        return self._issue_tokens(RefreshResponse, user)
+        access = self._create_access_token(str(user.id), user.email)
+        raw_refresh, _ = await self._create_rotatable_refresh(user.id)
+        return RefreshResponse(
+            access_token=access,
+            refresh_token=raw_refresh,
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
 
     def decode_access_token(self, token: str) -> dict[str, Any]:
         """
@@ -154,14 +184,19 @@ class AuthService:
     # Internal — JWT
     # ══════════════════════════════════════════
 
-    def _issue_tokens(self, response_cls, user: User):
-        access = self._create_access_token(str(user.id), user.email)
-        refresh = self._create_refresh_token(str(user.id))
-        return response_cls(
-            access_token=access,
-            refresh_token=refresh,
-            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    async def _create_rotatable_refresh(self, user_id):
+        """Generate a random refresh token, store its hash, return (raw, record)."""
+        import uuid as _uuid
+        uid = user_id if isinstance(user_id, _uuid.UUID) else _uuid.UUID(str(user_id))
+        raw = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw.encode()).hexdigest()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+        record = await self.refresh_tokens.create(
+            user_id=uid,
+            token_hash=token_hash,
+            expires_at=expires_at,
         )
+        return raw, record
 
     @staticmethod
     def _create_access_token(user_id: str, email: str) -> str:
@@ -171,16 +206,6 @@ class AuthService:
             "type": "access",
             "iat": datetime.now(timezone.utc),
             "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
-        }
-        return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-    @staticmethod
-    def _create_refresh_token(user_id: str) -> str:
-        payload = {
-            "sub": user_id,
-            "type": "refresh",
-            "iat": datetime.now(timezone.utc),
-            "exp": datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 

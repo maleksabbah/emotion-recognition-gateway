@@ -12,10 +12,12 @@ from app.Repositories.UserRepository import UserRepository
 from app.Repositories.RedisRepository import RedisRepository
 from app.Repositories.OrchestratorClient import OrchestratorClient
 from app.Repositories.StorageClient import StorageClient
+from app.Repositories.RefreshTokenRepository import RefreshTokenRepository
 
 __all__ = [
     "UserRepository",
     "RedisRepository",
     "OrchestratorClient",
     "StorageClient",
+    "RefreshTokenRepository",
 ]
