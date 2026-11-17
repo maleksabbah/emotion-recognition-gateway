@@ -99,15 +99,17 @@ def get_user_service(
 
 def get_job_proxy_service(
     client: OrchestratorClient = Depends(get_orchestrator_client),
+    redis_repo: RedisRepository = Depends(get_redis_repo),
 ) -> JobProxyService:
-    return JobProxyService(orchestrator=client)
+    return JobProxyService(orchestrator=client, redis_repo=redis_repo)
 
 
 def get_file_proxy_service(
     orchestrator: OrchestratorClient = Depends(get_orchestrator_client),
     storage: StorageClient = Depends(get_storage_client),
+    redis_repo: RedisRepository = Depends(get_redis_repo),
 ) -> FileProxyService:
-    return FileProxyService(orchestrator=orchestrator, storage=storage)
+    return FileProxyService(orchestrator=orchestrator, storage=storage, redis_repo=redis_repo)
 
 
 # ─── Current user resolution ───────────────────────────────────────────

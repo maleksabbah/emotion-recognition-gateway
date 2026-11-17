@@ -12,6 +12,7 @@ Wires the FastAPI app:
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import httpx
@@ -79,10 +80,15 @@ async def lifespan(app: FastAPI):
 
 # ─── App ───────────────────────────────────────────────────────────────
 
+_DEV = os.getenv("ENV", "production") != "production"
+
 app = FastAPI(
     title="Emotion Recognition Gateway",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if _DEV else None,
+    redoc_url="/redoc" if _DEV else None,
+    openapi_url="/openapi.json" if _DEV else None,
 )
 
 app.add_middleware(

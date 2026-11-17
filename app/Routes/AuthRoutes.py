@@ -14,12 +14,16 @@ from app.Dtos.AuthDto.LoginResponse import LoginResponse
 from app.Dtos.AuthDto.RefreshRequest import RefreshRequest
 from app.Dtos.AuthDto.RefreshResponse import RefreshResponse
 from app.Services.AuthService import AuthService
-from app.Dependencies import get_auth_service
+from app.Dependencies import get_auth_service, enforce_rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=RegisterResponse)
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    dependencies=[Depends(enforce_rate_limit)],
+)
 async def register(
     req: RegisterRequest,
     auth: AuthService = Depends(get_auth_service),
@@ -27,7 +31,11 @@ async def register(
     return await auth.register(req)
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    dependencies=[Depends(enforce_rate_limit)],
+)
 async def login(
     req: LoginRequest,
     auth: AuthService = Depends(get_auth_service),
@@ -35,7 +43,11 @@ async def login(
     return await auth.login(req)
 
 
-@router.post("/refresh", response_model=RefreshResponse)
+@router.post(
+    "/refresh",
+    response_model=RefreshResponse,
+    dependencies=[Depends(enforce_rate_limit)],
+)
 async def refresh(
     req: RefreshRequest,
     auth: AuthService = Depends(get_auth_service),

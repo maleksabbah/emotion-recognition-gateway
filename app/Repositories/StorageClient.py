@@ -18,6 +18,7 @@ import httpx
 
 from app.Config import STORAGE_SERVICE_URL
 from app.Exceptions import NotFound, StorageError, StorageUnreachable
+from app.Security.ServiceAuth import sign_request
 
 logger = logging.getLogger("gateway.storage-client")
 
@@ -87,7 +88,7 @@ class StorageClient:
 
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         try:
-            resp = await self.http.get(f"{self.base_url}{path}", params=params)
+            resp = await self.http.get(f"{self.base_url}{path}", params=params, headers=sign_request({}))
         except httpx.RequestError as e:
             logger.error("GET %s unreachable: %s", path, e)
             raise StorageUnreachable()
@@ -101,7 +102,7 @@ class StorageClient:
 
     async def _post(self, path: str, json: dict) -> Any:
         try:
-            resp = await self.http.post(f"{self.base_url}{path}", json=json)
+            resp = await self.http.post(f"{self.base_url}{path}", json=json, headers=sign_request({}))
         except httpx.RequestError as e:
             logger.error("POST %s unreachable: %s", path, e)
             raise StorageUnreachable()

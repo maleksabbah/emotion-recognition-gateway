@@ -24,6 +24,7 @@ from app.Exceptions import (
     OrchestratorError,
     OrchestratorUnreachable,
 )
+from app.Security.ServiceAuth import sign_request
 
 logger = logging.getLogger("gateway.orchestrator-client")
 
@@ -45,18 +46,19 @@ class OrchestratorClient:
             json={"mode": mode, "metadata": metadata or {}},
         )
 
-    async def list_sessions(self) -> list[dict]:
-        data = await self._get("/api/sessions")
+    async def list_sessions(self, user_id: str) -> list[dict]:
+        data = await self._get("/api/sessions", params={"user_id": user_id})
         return data if isinstance(data, list) else []
 
-    async def get_session_status(self, session_id: str) -> dict:
-        return await self._get(f"/api/sessions/{session_id}/status")
+    async def get_session_status(self, session_id: str, user_id: str) -> dict:
+        return await self._get(f"/api/sessions/{session_id}/status", params={"user_id": user_id})
 
     async def end_session(self, session_id: str) -> None:
         """Best-effort. Never raises — WS cleanup must not block."""
         try:
             resp = await self.http.post(
-                f"{self.base_url}/api/sessions/{session_id}/end"
+                f"{self.base_url}/api/sessions/{session_id}/end",
+                headers=sign_request({}),
             )
             if resp.status_code not in (200, 202):
                 logger.warning(
@@ -81,9 +83,9 @@ class OrchestratorClient:
     # Internal HTTP helpers
     # ══════════════════════════════════════════
 
-    async def _get(self, path: str) -> Any:
+    async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         try:
-            resp = await self.http.get(f"{self.base_url}{path}")
+            resp = await self.http.get(f"{self.base_url}{path}", params=params, headers=sign_request({}))
         except httpx.RequestError as e:
             logger.error("GET %s unreachable: %s", path, e)
             raise OrchestratorUnreachable()
@@ -97,7 +99,7 @@ class OrchestratorClient:
 
     async def _post(self, path: str, json: dict) -> Any:
         try:
-            resp = await self.http.post(f"{self.base_url}{path}", json=json)
+            resp = await self.http.post(f"{self.base_url}{path}", json=json, headers=sign_request({}))
         except httpx.RequestError as e:
             logger.error("POST %s unreachable: %s", path, e)
             raise OrchestratorUnreachable()

@@ -1,9 +1,11 @@
 """
-Repositories — the only place SQLAlchemy + Redis commands live.
+Entity models — SQLAlchemy ORM classes.
 
-Services inject repositories via constructor; controllers never see DB/cache details.
+Every model inherits from Base. Importing this package registers all
+models on Base.metadata so create_all sees the full table set.
 """
-from app.Repositories.UserRepository import UserRepository
-from app.Repositories.RedisRepository import RedisRepository
+from app.Entities.Base import Base
+from app.Entities.User import User
+from app.Entities.RequestLog import RequestLog
 
-__all__ = ["UserRepository", "RedisRepository"]
+__all__ = ["Base", "User", "RequestLog"]

@@ -66,7 +66,7 @@ class InvalidTokenType(Unauthorized):
 
 class UserNotFound(Unauthorized):
     # 401, not 404 — don't reveal whether a user exists
-    default_detail = "User not found"
+    default_detail = "Unauthorized"
 
 
 # --- 403 Forbidden ------------------------------
@@ -158,6 +158,16 @@ async def domain_exception_handler(
     )
 
 
+async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for unhandled exceptions — log the traceback, return 500."""
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Wire the handler into a FastAPI app. Call from main.py."""
     app.add_exception_handler(DomainException, domain_exception_handler)
+    app.add_exception_handler(Exception, generic_exception_handler)

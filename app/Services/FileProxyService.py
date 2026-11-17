@@ -18,13 +18,20 @@ from app.Dtos.UploadDto.UploadResponse import UploadResponse
 from app.Entities.User import User
 from app.Exceptions import NotFound
 from app.Repositories.OrchestratorClient import OrchestratorClient
+from app.Repositories.RedisRepository import RedisRepository
 from app.Repositories.StorageClient import StorageClient
 
 
 class FileProxyService:
-    def __init__(self, orchestrator: OrchestratorClient, storage: StorageClient):
+    def __init__(
+        self,
+        orchestrator: OrchestratorClient,
+        storage: StorageClient,
+        redis_repo: RedisRepository,
+    ):
         self.orchestrator = orchestrator
         self.storage = storage
+        self.redis_repo = redis_repo
 
     # ══════════════════════════════════════════
     # Upload — create session + presign PUT
@@ -57,10 +64,18 @@ class FileProxyService:
             user_id=str(user.id),
         )
 
+        s3_key = presign["s3_key"]
+
+        # Store expected s3_key so complete_upload can validate it
+        try:
+            await self.redis_repo.store_expected_s3_key(session_id, s3_key)
+        except Exception:
+            pass  # Fail open — don't block uploads if Redis is down
+
         return UploadResponse(
             session_id=session_id,
             upload_url=presign["upload_url"],
-            s3_key=presign["s3_key"],
+            s3_key=s3_key,
         )
 
     # ══════════════════════════════════════════
@@ -71,12 +86,12 @@ class FileProxyService:
         """
         Resolve the burned output for a session.
 
-        Note: workers (media-worker, burner) don't propagate user_id to the
-        FileRecord rows today, so the burned row's user_id is NULL. Filtering
-        the storage lookup by user_id here would always miss. Authentication
-        gates the route, and session_ids are unguessable UUIDs — that's the
-        scoping we rely on until user_id is plumbed through Kafka tasks.
+        Verifies ownership via orchestrator (user_id in session metadata)
+        before returning the presigned download URL.
         """
+        # Ownership check — orchestrator returns 404 if user_id doesn't match
+        await self.orchestrator.get_session_status(session_id, user_id=str(user.id))
+
         files = await self.storage.list_files(
             session_id=session_id,
             category="burned",

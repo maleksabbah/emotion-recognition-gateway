@@ -11,7 +11,7 @@ import os
 
 # ─── JWT / Auth ────────────────────────────────────────────────────────
 
-JWT_SECRET = os.getenv("JWT_SECRET_KEY", "dev-secret-change-in-production")
+JWT_SECRET = os.environ["JWT_SECRET_KEY"]
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
@@ -23,7 +23,7 @@ BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "emotion")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "emotion_dev")
+POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
 GATEWAY_DB = os.getenv("GATEWAY_DB", "gateway_db")
 # Honor DATABASE_URL if set (e.g. RDS); otherwise compose from the parts.
 GATEWAY_DB_URL = os.getenv("DATABASE_URL") or (
@@ -50,6 +50,15 @@ STORAGE_SERVICE_URL = os.getenv("STORAGE_SERVICE_URL", "http://storage:8002")
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS", "http://localhost:3000,http://localhost:5173"
 ).split(",")
+
+
+# ─── Rate limiting ────────────────────────────────────────────────────
+
+
+
+# ─── Kafka (SASL) ────────────────────────────────────────────────────
+KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME", "")
+KAFKA_SASL_PASSWORD = os.getenv("KAFKA_SASL_PASSWORD", "")
 
 
 # ─── Rate limiting ────────────────────────────────────────────────────

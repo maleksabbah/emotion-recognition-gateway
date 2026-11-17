@@ -49,7 +49,7 @@ class UserRepository:
             hashed_password=hashed_password,
         )
         self.db.add(user)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(user)
         return user
 
@@ -60,4 +60,3 @@ class UserRepository:
             .where(User.id == uid)
             .values(last_login=datetime.now(timezone.utc))
         )
-        await self.db.commit()
