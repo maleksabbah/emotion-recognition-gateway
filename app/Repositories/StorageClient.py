@@ -8,8 +8,6 @@ Methods are limited to what the gateway actually calls:
   - presign_upload    (FileProxyService.presign_upload)
   - presign_download  (FileProxyService.get_download)
   - list_files        (FileProxyService.get_download)
-  - head_source       (JobProxyService.complete_upload — real uploaded size)
-  - delete_source     (JobProxyService.complete_upload — drop oversize upload)
 """
 from __future__ import annotations
 
@@ -41,12 +39,8 @@ class StorageClient:
         mime_type: str,
         original_filename: Optional[str] = None,
         user_id: Optional[str] = None,
-        size_bytes: Optional[int] = None,
     ) -> dict:
-        """
-        POST /internal/presign/upload → {file_id, upload_url, s3_key}.
-        size_bytes, when given, is signed into the PUT as Content-Length.
-        """
+        """POST /internal/presign/upload → {file_id, upload_url, s3_key}."""
         body: dict[str, Any] = {
             "session_id": session_id,
             "file_type": file_type,
@@ -56,8 +50,6 @@ class StorageClient:
             body["original_filename"] = original_filename
         if user_id is not None:
             body["user_id"] = user_id
-        if size_bytes is not None:
-            body["size_bytes"] = size_bytes
         return await self._post("/internal/presign/upload", json=body)
 
     async def presign_download(self, file_id: str) -> dict:
@@ -89,33 +81,6 @@ class StorageClient:
             params["file_type"] = file_type
         data = await self._get("/internal/files", params=params)
         return data if isinstance(data, list) else []
-
-    # ══════════════════════════════════════════
-    # Session source file (uploaded by the browser)
-    # ══════════════════════════════════════════
-
-    async def head_source(self, session_id: str) -> dict:
-        """
-        GET /internal/sessions/{id}/source → {file_id, s3_key, size_bytes, mime_type}.
-        Raises NotFound if there's no source record or the object isn't in S3.
-        """
-        return await self._get(f"/internal/sessions/{session_id}/source")
-
-    async def delete_source(self, session_id: str) -> None:
-        """DELETE /internal/sessions/{id}/source — removes object(s) + rows."""
-        try:
-            resp = await self.http.delete(
-                f"{self.base_url}/internal/sessions/{session_id}/source",
-                headers=sign_request({}),
-            )
-        except httpx.RequestError as e:
-            logger.error("DELETE source for %s unreachable: %s", session_id, e)
-            raise StorageUnreachable()
-        if resp.status_code not in (200, 404):
-            logger.error(
-                "DELETE source for %s -> %s: %s", session_id, resp.status_code, resp.text
-            )
-            raise StorageError()
 
     # ══════════════════════════════════════════
     # Internal HTTP helpers

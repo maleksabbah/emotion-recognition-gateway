@@ -8,24 +8,18 @@ Owns the upload flow end-to-end:
 
 Takes both OrchestratorClient and StorageClient because the upload flow
 needs orchestrator (sessions) and storage (presigning) coordinated. The
-controller doesn't see this — it calls one method. QuotaService gates the
-presign (size / hourly rate / monthly count) before anything is created.
+controller doesn't see this — it calls one method.
 """
 from __future__ import annotations
-
-import logging
 
 from app.Dtos.JobDto.DownloadResponse import DownloadResponse
 from app.Dtos.UploadDto.UploadRequest import UploadRequest
 from app.Dtos.UploadDto.UploadResponse import UploadResponse
 from app.Entities.User import User
-from app.Exceptions import NotFound, UsageUnavailable
+from app.Exceptions import NotFound
 from app.Repositories.OrchestratorClient import OrchestratorClient
 from app.Repositories.RedisRepository import RedisRepository
 from app.Repositories.StorageClient import StorageClient
-from app.Services.QuotaService import QuotaService
-
-logger = logging.getLogger("gateway.file-proxy")
 
 
 class FileProxyService:
@@ -34,12 +28,10 @@ class FileProxyService:
         orchestrator: OrchestratorClient,
         storage: StorageClient,
         redis_repo: RedisRepository,
-        quota: QuotaService,
     ):
         self.orchestrator = orchestrator
         self.storage = storage
         self.redis_repo = redis_repo
-        self.quota = quota
 
     # ══════════════════════════════════════════
     # Upload — create session + presign PUT
@@ -47,17 +39,11 @@ class FileProxyService:
 
     async def presign_upload(self, req: UploadRequest, user: User) -> UploadResponse:
         """
-        0. Quota: size vs plan, uploads/hour, monthly count (fails open).
         1. Orchestrator: create a session with the correct mode (photo/video).
-        2. Storage: pre-register the file row + sign a PUT URL whose
-           Content-Length is the declared size.
-        3. Redis: remember {s3_key, user_id, kind, size} so complete uses
-           server-side values, not the client's.
-        4. Return both — browser uses the URL, polls status with session_id.
+        2. Storage: pre-register the file row + sign a PUT URL.
+        3. Return both — browser uses the URL, polls status with session_id.
         """
         mode = "photo" if req.content_type.startswith("image/") else "video"
-
-        await self.quota.check_presign(user, mode, req.size)
 
         session = await self.orchestrator.create_session(
             mode=mode,
@@ -65,7 +51,6 @@ class FileProxyService:
                 "user_id": str(user.id),
                 "filename": req.filename,
                 "content_type": req.content_type,
-                "declared_size": req.size,
             },
         )
         # Orchestrator returns JobResponse with key "id" (not "session_id").
@@ -77,25 +62,15 @@ class FileProxyService:
             mime_type=req.content_type,
             original_filename=req.filename,
             user_id=str(user.id),
-            size_bytes=req.size,
         )
 
         s3_key = presign["s3_key"]
 
-        # complete_upload refuses to run without this entry, so if it can't
-        # be written there's no point letting the browser upload the file.
+        # Store expected s3_key so complete_upload can validate it
         try:
-            await self.redis_repo.store_upload_entry(session_id, {
-                "s3_key": s3_key,
-                "user_id": str(user.id),
-                "kind": mode,
-                "size": req.size,
-            })
-        except Exception as e:
-            logger.error("store_upload_entry failed for %s: %s", session_id, e)
-            raise UsageUnavailable(
-                "Uploads are temporarily unavailable. Please try again in a minute."
-            )
+            await self.redis_repo.store_expected_s3_key(session_id, s3_key)
+        except Exception:
+            pass  # Fail open — don't block uploads if Redis is down
 
         return UploadResponse(
             session_id=session_id,
