@@ -10,6 +10,7 @@ Methods are limited to what the gateway actually calls:
   - end_session             (JobProxyService.end_session)
   - get_session_status      (JobProxyService.get_status)
   - list_sessions           (JobProxyService.list_jobs)
+  - get_usage               (QuotaService.usage)
 """
 from __future__ import annotations
 
@@ -72,12 +73,38 @@ class OrchestratorClient:
     # ══════════════════════════════════════════
 
     async def submit_upload_job(
-        self, session_id: str, mode: str, s3_key: str
+        self,
+        session_id: str,
+        mode: str,
+        s3_key: str,
+        limits: Optional[dict] = None,
     ) -> dict:
         return await self._post(
             "/api/upload-job",
-            json={"session_id": session_id, "mode": mode, "s3_key": s3_key},
+            json={
+                "session_id": session_id,
+                "mode": mode,
+                "s3_key": s3_key,
+                "limits": limits,
+            },
         )
+
+    # ══════════════════════════════════════════
+    # Usage
+    # ══════════════════════════════════════════
+
+    async def get_usage(
+        self, user_id: str, live_session_cap_seconds: Optional[int] = None
+    ) -> dict:
+        """
+        GET /api/usage → {photos, videos, live_seconds, active_jobs} for this
+        UTC month. Raises like every other call; QuotaService decides whether
+        a failure fails open or closed.
+        """
+        params: dict[str, Any] = {"user_id": user_id}
+        if live_session_cap_seconds is not None:
+            params["live_session_cap_seconds"] = live_session_cap_seconds
+        return await self._get("/api/usage", params=params)
 
     # ══════════════════════════════════════════
     # Internal HTTP helpers
