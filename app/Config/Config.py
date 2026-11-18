@@ -67,3 +67,66 @@ RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "500"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 UPLOAD_RATE_LIMIT = int(os.getenv("UPLOAD_RATE_LIMIT", "60"))
 UPLOAD_RATE_WINDOW_SECONDS = int(os.getenv("UPLOAD_RATE_WINDOW_SECONDS", "60"))
+
+
+# ─── Plans ────────────────────────────────────────────────────────────
+#
+# Plan limits live in code (no plans table). Each numeric field can be
+# overridden via env: PLAN_<NAME>_<FIELD>, e.g. PLAN_FREE_PHOTOS_PER_MONTH=100.
+# Admins (users.is_admin) bypass every limit. Monthly period = UTC calendar
+# month. The orchestrator keeps a copy of the live_* numbers (LIVE_LIMITS in
+# its Config) because it enforces live mode on its own WebSocket.
+
+DEFAULT_PLAN = "free"
+
+_MB = 1024 * 1024
+
+PLAN_LIMIT_FIELDS = (
+    "photos_per_month",
+    "videos_per_month",
+    "max_image_bytes",
+    "max_video_bytes",
+    "max_video_seconds",
+    "uploads_per_hour",
+    "max_concurrent_jobs",
+    "live_minutes_per_month",
+    "live_session_max_seconds",
+)
+
+
+def _plan(name: str, available: bool, **limits: int) -> dict:
+    out: dict = {"name": name, "available": available}
+    for field in PLAN_LIMIT_FIELDS:
+        env_key = f"PLAN_{name.upper()}_{field.upper()}"
+        out[field] = int(os.getenv(env_key, str(limits[field])))
+    return out
+
+
+PLANS: dict[str, dict] = {
+    "free": _plan(
+        "free",
+        available=True,
+        photos_per_month=50,
+        videos_per_month=5,
+        max_image_bytes=10 * _MB,
+        max_video_bytes=50 * _MB,
+        max_video_seconds=30,
+        uploads_per_hour=20,
+        max_concurrent_jobs=1,
+        live_minutes_per_month=15,
+        live_session_max_seconds=120,
+    ),
+    "pro": _plan(
+        "pro",
+        available=False,  # coming soon — not purchasable yet
+        photos_per_month=1000,
+        videos_per_month=100,
+        max_image_bytes=25 * _MB,
+        max_video_bytes=500 * _MB,
+        max_video_seconds=300,
+        uploads_per_hour=200,
+        max_concurrent_jobs=3,
+        live_minutes_per_month=600,
+        live_session_max_seconds=1800,
+    ),
+}

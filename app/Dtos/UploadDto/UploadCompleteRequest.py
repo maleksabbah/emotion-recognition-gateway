@@ -13,4 +13,6 @@ class UploadCompleteRequest(BaseModel):
     """
     session_id: str
     s3_key: str
+    # Accepted for backward compatibility but ignored — the gateway uses the
+    # mode it derived at presign (stored server-side in Redis).
     mode: Optional[Literal["video", "photo"]] = "video"
