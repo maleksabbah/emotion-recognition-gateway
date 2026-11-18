@@ -32,7 +32,6 @@ from app.Services.AuthService import AuthService
 from app.Services.UserService import UserService
 from app.Services.JobProxyService import JobProxyService
 from app.Services.FileProxyService import FileProxyService
-from app.Services.QuotaService import QuotaService
 
 
 # ─── Per-request DB session ────────────────────────────────────────────
@@ -106,33 +105,19 @@ def get_user_service(
     return UserService(users=users)
 
 
-def get_quota_service(
-    orchestrator: OrchestratorClient = Depends(get_orchestrator_client),
-    redis_repo: RedisRepository = Depends(get_redis_repo),
-) -> QuotaService:
-    return QuotaService(orchestrator=orchestrator, redis_repo=redis_repo)
-
-
 def get_job_proxy_service(
     client: OrchestratorClient = Depends(get_orchestrator_client),
     redis_repo: RedisRepository = Depends(get_redis_repo),
-    storage: StorageClient = Depends(get_storage_client),
-    quota: QuotaService = Depends(get_quota_service),
 ) -> JobProxyService:
-    return JobProxyService(
-        orchestrator=client, redis_repo=redis_repo, storage=storage, quota=quota
-    )
+    return JobProxyService(orchestrator=client, redis_repo=redis_repo)
 
 
 def get_file_proxy_service(
     orchestrator: OrchestratorClient = Depends(get_orchestrator_client),
     storage: StorageClient = Depends(get_storage_client),
     redis_repo: RedisRepository = Depends(get_redis_repo),
-    quota: QuotaService = Depends(get_quota_service),
 ) -> FileProxyService:
-    return FileProxyService(
-        orchestrator=orchestrator, storage=storage, redis_repo=redis_repo, quota=quota
-    )
+    return FileProxyService(orchestrator=orchestrator, storage=storage, redis_repo=redis_repo)
 
 
 # ─── Current user resolution ───────────────────────────────────────────

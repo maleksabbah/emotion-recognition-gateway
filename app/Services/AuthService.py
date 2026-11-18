@@ -20,7 +20,6 @@ import jwt
 from app.Config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     BCRYPT_ROUNDS,
-    DEFAULT_PLAN,
     JWT_ALGORITHM,
     JWT_SECRET,
     REFRESH_TOKEN_EXPIRE_DAYS,
@@ -78,7 +77,7 @@ class AuthService:
 
         await self.users.update_last_login(user.id)
 
-        access = self._create_access_token(user)
+        access = self._create_access_token(str(user.id), user.email)
         raw_refresh, _ = await self._create_rotatable_refresh(user.id)
         return LoginResponse(
             access_token=access,
@@ -110,7 +109,7 @@ class AuthService:
         if not user.is_active:
             raise AccountDisabled()
 
-        access = self._create_access_token(user)
+        access = self._create_access_token(str(user.id), user.email)
         raw_refresh, _ = await self._create_rotatable_refresh(user.id)
         return RefreshResponse(
             access_token=access,
@@ -200,15 +199,10 @@ class AuthService:
         return raw, record
 
     @staticmethod
-    def _create_access_token(user: User) -> str:
-        # `plan` + `is_admin` let the orchestrator enforce live-mode limits on
-        # its own WebSocket without a users table. Plan changes take effect on
-        # the next refresh (access tokens are short-lived).
+    def _create_access_token(user_id: str, email: str) -> str:
         payload = {
-            "sub": str(user.id),
-            "email": user.email,
-            "plan": user.plan or DEFAULT_PLAN,
-            "is_admin": bool(user.is_admin),
+            "sub": user_id,
+            "email": email,
             "type": "access",
             "iat": datetime.now(timezone.utc),
             "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
