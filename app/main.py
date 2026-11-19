@@ -27,6 +27,7 @@ from app.Routes import (
     auth_router,
     health_router,
     job_router,
+    quota_router,
     upload_router,
     user_router,
 )
@@ -109,3 +110,4 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(user_router, prefix="/api")
 app.include_router(upload_router, prefix="/api")
 app.include_router(job_router, prefix="/api")
+app.include_router(quota_router, prefix="/api")

@@ -35,6 +35,7 @@ class UserService:
             "username": user.username,
             "is_active": user.is_active,
             "created_at": user.created_at,
+            "plan": user.plan,
         })
 
     async def load_active_user(self, user_id: str) -> User:
