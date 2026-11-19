@@ -20,8 +20,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.Config import CORS_ORIGINS, GATEWAY_DB_URL, get_redis
+from app.Config import CORS_ORIGINS, GATEWAY_DB_URL, SessionLocal, get_redis
 from app.Entities import Base
+from app.Repositories.PlanRepository import PlanRepository
 from app.Exceptions import register_exception_handlers
 from app.Routes import (
     auth_router,
@@ -64,6 +65,14 @@ async def lifespan(app: FastAPI):
         logger.info("Schema ensured")
     finally:
         await schema_engine.dispose()
+
+    # Seed any plan that has no row yet. Existing rows are left alone, so
+    # limits edited in the table survive redeploys.
+    async with SessionLocal() as session:
+        added = await PlanRepository(session).seed_missing()
+        await session.commit()
+    if added:
+        logger.info("Seeded plans: %s", ", ".join(added))
 
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(10.0, connect=5.0),

@@ -28,6 +28,7 @@ from app.Repositories.OrchestratorClient import OrchestratorClient
 from app.Repositories.StorageClient import StorageClient
 from app.Repositories.RedisRepository import RedisRepository
 from app.Repositories.RefreshTokenRepository import RefreshTokenRepository
+from app.Repositories.PlanRepository import PlanRepository
 from app.Services.AuthService import AuthService
 from app.Services.UserService import UserService
 from app.Services.JobProxyService import JobProxyService
@@ -91,13 +92,20 @@ def get_refresh_token_repo(
     return RefreshTokenRepository(session)
 
 
+def get_plan_repo(
+    session: AsyncSession = Depends(get_db_session),
+) -> PlanRepository:
+    return PlanRepository(session)
+
+
 # ─── Services ──────────────────────────────────────────────────────────
 
 def get_auth_service(
     users: UserRepository = Depends(get_user_repo),
     refresh_tokens: RefreshTokenRepository = Depends(get_refresh_token_repo),
+    plans: PlanRepository = Depends(get_plan_repo),
 ) -> AuthService:
-    return AuthService(users=users, refresh_tokens=refresh_tokens)
+    return AuthService(users=users, refresh_tokens=refresh_tokens, plans=plans)
 
 
 def get_user_service(
@@ -109,8 +117,9 @@ def get_user_service(
 def get_quota_service(
     orchestrator: OrchestratorClient = Depends(get_orchestrator_client),
     redis_repo: RedisRepository = Depends(get_redis_repo),
+    plans: PlanRepository = Depends(get_plan_repo),
 ) -> QuotaService:
-    return QuotaService(orchestrator=orchestrator, redis_repo=redis_repo)
+    return QuotaService(orchestrator=orchestrator, redis_repo=redis_repo, plans=plans)
 
 
 def get_job_proxy_service(

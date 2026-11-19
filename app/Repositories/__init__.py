@@ -1,7 +1,7 @@
 """
 Gateway repositories — boundary layer.
 
-One DB-backed:      UserRepository
+DB-backed:          UserRepository, RefreshTokenRepository, PlanRepository
 One Redis-backed:   RedisRepository    (rate-limit only)
 Two HTTP-backed:    OrchestratorClient, StorageClient
 
@@ -13,6 +13,7 @@ from app.Repositories.RedisRepository import RedisRepository
 from app.Repositories.OrchestratorClient import OrchestratorClient
 from app.Repositories.StorageClient import StorageClient
 from app.Repositories.RefreshTokenRepository import RefreshTokenRepository
+from app.Repositories.PlanRepository import PlanRepository
 
 __all__ = [
     "UserRepository",
@@ -20,4 +21,5 @@ __all__ = [
     "OrchestratorClient",
     "StorageClient",
     "RefreshTokenRepository",
+    "PlanRepository",
 ]

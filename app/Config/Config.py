@@ -7,6 +7,7 @@ from this module, not from os.getenv directly.
 from __future__ import annotations
 
 import os
+import re
 
 
 # ─── JWT / Auth ────────────────────────────────────────────────────────
@@ -23,10 +24,24 @@ BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "emotion")
-POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 GATEWAY_DB = os.getenv("GATEWAY_DB", "gateway_db")
 # Honor DATABASE_URL if set (e.g. RDS); otherwise compose from the parts.
-GATEWAY_DB_URL = os.getenv("DATABASE_URL") or (
+def _asyncpg_url(url: str) -> str:
+    """
+    Normalise a provider URL for SQLAlchemy + asyncpg. Railway/Supabase hand
+    out postgres:// or postgresql://; asyncpg also rejects libpq's sslmode=,
+    so map it to its own ssl= parameter.
+    """
+    url = re.sub(r"^postgres(ql)?://", "postgresql+asyncpg://", url)
+    return re.sub(r"([?&])sslmode=", r"\1ssl=", url)
+
+
+_DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if not _DATABASE_URL and not POSTGRES_PASSWORD:
+    raise RuntimeError("Set DATABASE_URL, or POSTGRES_PASSWORD with the POSTGRES_* parts")
+
+GATEWAY_DB_URL = _asyncpg_url(_DATABASE_URL) if _DATABASE_URL else (
     f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
     f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{GATEWAY_DB}"
 )
@@ -71,11 +86,14 @@ UPLOAD_RATE_WINDOW_SECONDS = int(os.getenv("UPLOAD_RATE_WINDOW_SECONDS", "60"))
 
 # ─── Plans ────────────────────────────────────────────────────────────
 #
-# Plan limits live in code (no plans table). Each numeric field can be
-# overridden via env: PLAN_<NAME>_<FIELD>, e.g. PLAN_FREE_PHOTOS_PER_MONTH=100.
+# The plans table (gateway_db.plans) is the source of truth. These are only
+# the DEFAULTS: on boot, any plan below without a row is inserted with these
+# numbers; an existing row is never overwritten, so edit the row (not this
+# file) to change a live plan. They're also the fallback if a row is missing.
+# Each numeric default can be overridden via env before first seeding:
+# PLAN_<NAME>_<FIELD>, e.g. PLAN_FREE_PHOTOS_PER_MONTH=100.
 # Admins (users.is_admin) bypass every limit. Monthly period = UTC calendar
-# month. The orchestrator keeps a copy of the live_* numbers (LIVE_LIMITS in
-# its Config) because it enforces live mode on its own WebSocket.
+# month. The live_* numbers reach the orchestrator inside each access token.
 
 DEFAULT_PLAN = "free"
 

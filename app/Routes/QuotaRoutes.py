@@ -22,8 +22,10 @@ router = APIRouter(tags=["quota"])
     response_model=PlansResponse,
     dependencies=[Depends(enforce_rate_limit)],
 )
-async def list_plans() -> PlansResponse:
-    return QuotaService.list_plans()
+async def list_plans(
+    quota: QuotaService = Depends(get_quota_service),
+) -> PlansResponse:
+    return await quota.list_plans()
 
 
 @router.get("/auth/quota", response_model=QuotaResponse)

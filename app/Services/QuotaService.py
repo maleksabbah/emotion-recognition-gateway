@@ -1,8 +1,8 @@
 """
 QuotaService — plan-based usage limits.
 
-Limits  = app.Config.PLANS[user.plan] (unknown plan → free). Kept in code,
-          not in the DB.
+Limits  = the user's row in the plans table (PlanRepository; unknown plan →
+          free, missing row → code defaults in app.Config.PLANS).
 Usage   = the orchestrator's session rows (source of truth): photo/video
           jobs this UTC calendar month, live seconds this month, and jobs
           currently processing. Nothing is counted here, so nothing drifts
@@ -16,7 +16,7 @@ Where it's enforced:
   complete  monthly count + concurrent jobs, re-checked from fresh usage.
             Fails CLOSED (503) — this is the step that spends compute.
   live      enforced by the orchestrator on its own WebSocket using the
-            plan/is_admin claims in the access token.
+            live limits the gateway puts in the access token (AuthService).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
-from app.Config import DEFAULT_PLAN, PLAN_LIMIT_FIELDS, PLANS
+from app.Config import PLAN_LIMIT_FIELDS
 from app.Dtos.QuotaDto.PlanLimits import PlanLimits
 from app.Dtos.QuotaDto.PlansResponse import PlanInfo, PlansResponse
 from app.Dtos.QuotaDto.QuotaResponse import QuotaResponse, QuotaUsage
@@ -38,6 +38,7 @@ from app.Exceptions import (
     UsageUnavailable,
 )
 from app.Repositories.OrchestratorClient import OrchestratorClient
+from app.Repositories.PlanRepository import PlanRepository
 from app.Repositories.RedisRepository import RedisRepository
 
 logger = logging.getLogger("gateway.quota")
@@ -71,35 +72,36 @@ def _mb(n: int) -> str:
 
 
 class QuotaService:
-    def __init__(self, orchestrator: OrchestratorClient, redis_repo: RedisRepository):
+    def __init__(
+        self,
+        orchestrator: OrchestratorClient,
+        redis_repo: RedisRepository,
+        plans: PlanRepository,
+    ):
         self.orchestrator = orchestrator
         self.redis_repo = redis_repo
+        self.plans = plans
 
     # ══════════════════════════════════════════
     # Plans + limits
     # ══════════════════════════════════════════
 
-    @staticmethod
-    def list_plans() -> PlansResponse:
-        return PlansResponse(plans=[PlanInfo(**p) for p in PLANS.values()])
+    async def list_plans(self) -> PlansResponse:
+        return PlansResponse(plans=[PlanInfo(**p) for p in await self.plans.all()])
 
     @staticmethod
     def is_unlimited(user: User) -> bool:
         return bool(user.is_admin)
 
-    @staticmethod
-    def plan_name(user: User) -> str:
-        return user.plan if user.plan in PLANS else DEFAULT_PLAN
-
-    def limits(self, user: User) -> Optional[dict[str, int]]:
-        """The user's plan limits, or None if unlimited (admin)."""
+    async def limits(self, user: User) -> Optional[dict[str, int]]:
+        """The user's plan limits from the plans table, or None if unlimited (admin)."""
         if self.is_unlimited(user):
             return None
-        plan = PLANS[self.plan_name(user)]
+        plan = await self.plans.get(user.plan)
         return {field: plan[field] for field in PLAN_LIMIT_FIELDS}
 
-    def max_bytes(self, user: User, kind: Kind) -> Optional[int]:
-        lim = self.limits(user)
+    async def max_bytes(self, user: User, kind: Kind) -> Optional[int]:
+        lim = await self.limits(user)
         if lim is None:
             return None
         return lim["max_image_bytes"] if kind == "photo" else lim["max_video_bytes"]
@@ -114,7 +116,7 @@ class QuotaService:
         None if the orchestrator couldn't be asked. Callers decide whether
         None means allow (read-only checks) or refuse (complete).
         """
-        lim = self.limits(user)
+        lim = await self.limits(user)
         cap = lim["live_session_max_seconds"] if lim else None
         try:
             body = await self.orchestrator.get_usage(
@@ -143,10 +145,11 @@ class QuotaService:
 
     async def status(self, user: User) -> QuotaResponse:
         start, end = period()
-        lim = self.limits(user)
+        plan = await self.plans.get(user.plan)
+        lim = None if self.is_unlimited(user) else {f: plan[f] for f in PLAN_LIMIT_FIELDS}
         usage = await self.usage(user)
         return QuotaResponse(
-            plan=self.plan_name(user),
+            plan=plan["name"],
             unlimited=lim is None,
             limits=PlanLimits(**(lim or {})),
             usage=QuotaUsage(**(usage or {})),
@@ -164,11 +167,11 @@ class QuotaService:
         Size, hourly upload rate, monthly count. Fails open on Redis /
         orchestrator errors — complete is the authoritative check.
         """
-        lim = self.limits(user)
+        lim = await self.limits(user)
         if lim is None:
             return
 
-        max_bytes = self.max_bytes(user, kind)
+        max_bytes = lim["max_image_bytes"] if kind == "photo" else lim["max_video_bytes"]
         if size > max_bytes:
             raise self.file_too_large(kind, size, max_bytes)
 
@@ -184,7 +187,7 @@ class QuotaService:
         CLOSED. Returns the limits dict to forward to the orchestrator
         (None for admins = unlimited).
         """
-        lim = self.limits(user)
+        lim = await self.limits(user)
         if lim is None:
             return None
 

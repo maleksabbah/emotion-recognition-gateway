@@ -45,12 +45,19 @@ from app.Exceptions import (
 )
 from app.Repositories.UserRepository import UserRepository
 from app.Repositories.RefreshTokenRepository import RefreshTokenRepository
+from app.Repositories.PlanRepository import PlanRepository
 
 
 class AuthService:
-    def __init__(self, users: UserRepository, refresh_tokens: RefreshTokenRepository):
+    def __init__(
+        self,
+        users: UserRepository,
+        refresh_tokens: RefreshTokenRepository,
+        plans: PlanRepository,
+    ):
         self.users = users
         self.refresh_tokens = refresh_tokens
+        self.plans = plans
 
     # ══════════════════════════════════════════
     # Use cases
@@ -78,7 +85,7 @@ class AuthService:
 
         await self.users.update_last_login(user.id)
 
-        access = self._create_access_token(user)
+        access = await self._create_access_token(user)
         raw_refresh, _ = await self._create_rotatable_refresh(user.id)
         return LoginResponse(
             access_token=access,
@@ -110,7 +117,7 @@ class AuthService:
         if not user.is_active:
             raise AccountDisabled()
 
-        access = self._create_access_token(user)
+        access = await self._create_access_token(user)
         raw_refresh, _ = await self._create_rotatable_refresh(user.id)
         return RefreshResponse(
             access_token=access,
@@ -199,16 +206,27 @@ class AuthService:
         )
         return raw, record
 
-    @staticmethod
-    def _create_access_token(user: User) -> str:
-        # `plan` + `is_admin` let the orchestrator enforce live-mode limits on
-        # its own WebSocket without a users table. Plan changes take effect on
+    async def _create_access_token(self, user: User) -> str:
+        # The orchestrator enforces live mode on its own WebSocket and has no
+        # plans table, so the gateway hands it the limits here, read from the
+        # plans table: `live` = {monthly_seconds, session_max_seconds}, or
+        # null for admins (unlimited). Plan or limit changes take effect on
         # the next refresh (access tokens are short-lived).
+        if user.is_admin:
+            plan_name, live = (user.plan or DEFAULT_PLAN), None
+        else:
+            plan = await self.plans.get(user.plan)
+            plan_name = plan["name"]
+            live = {
+                "monthly_seconds": plan["live_minutes_per_month"] * 60,
+                "session_max_seconds": plan["live_session_max_seconds"],
+            }
         payload = {
             "sub": str(user.id),
             "email": user.email,
-            "plan": user.plan or DEFAULT_PLAN,
+            "plan": plan_name,
             "is_admin": bool(user.is_admin),
+            "live": live,
             "type": "access",
             "iat": datetime.now(timezone.utc),
             "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),

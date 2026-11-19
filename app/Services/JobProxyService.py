@@ -176,7 +176,7 @@ class JobProxyService:
             logger.error("head_source for %s returned no size: %r", session_id, info)
             raise StorageError()
 
-        max_bytes = self.quota.max_bytes(user, kind)
+        max_bytes = await self.quota.max_bytes(user, kind)
         if max_bytes is None or actual <= max_bytes:
             return
 
