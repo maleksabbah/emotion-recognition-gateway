@@ -198,7 +198,7 @@ class QuotaService:
         max_jobs = lim["max_concurrent_jobs"]
         if usage["active_jobs"] >= max_jobs:
             raise ConcurrentLimit(
-                f"Your plan allows {max_jobs} job{'s' if max_jobs != 1 else ''} "
+                f"Your plan allows {max_jobs} {'analyses' if max_jobs != 1 else 'analysis'} "
                 "at a time. Wait for the running one to finish, then try again."
             )
 

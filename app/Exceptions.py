@@ -166,7 +166,7 @@ class QuotaExceeded(DomainException):
 
 class ConcurrentLimit(DomainException):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
-    default_detail = "Too many jobs running, wait for one to finish"
+    default_detail = "Too many analyses running, wait for one to finish"
     code = "concurrent_limit"
 
     def __init__(self, detail: Optional[str] = None, retry_after: Optional[int] = None):
