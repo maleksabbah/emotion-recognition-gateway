@@ -21,6 +21,8 @@ def plan_dict(row: Plan) -> dict:
     return {
         "name": row.name,
         "available": bool(row.available),
+        "price_cents_monthly": int(row.price_cents_monthly or 0),
+        "currency": row.currency or "usd",
         **{field: int(getattr(row, field)) for field in PLAN_LIMIT_FIELDS},
     }
 

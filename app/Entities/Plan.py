@@ -28,6 +28,9 @@ class Plan(Base):
 
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
     available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Display price; no billing is wired up yet. 0 = free.
+    price_cents_monthly: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="usd")
 
     photos_per_month: Mapped[int] = mapped_column(Integer, nullable=False)
     videos_per_month: Mapped[int] = mapped_column(Integer, nullable=False)

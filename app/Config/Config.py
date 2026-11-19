@@ -112,8 +112,14 @@ PLAN_LIMIT_FIELDS = (
 )
 
 
-def _plan(name: str, available: bool, **limits: int) -> dict:
-    out: dict = {"name": name, "available": available}
+def _plan(name: str, available: bool, price_cents_monthly: int, **limits: int) -> dict:
+    # price_cents_monthly is display-only for now (no billing yet): 0 = free.
+    out: dict = {
+        "name": name,
+        "available": available,
+        "price_cents_monthly": int(os.getenv(f"PLAN_{name.upper()}_PRICE_CENTS_MONTHLY", str(price_cents_monthly))),
+        "currency": "usd",
+    }
     for field in PLAN_LIMIT_FIELDS:
         env_key = f"PLAN_{name.upper()}_{field.upper()}"
         out[field] = int(os.getenv(env_key, str(limits[field])))
@@ -124,6 +130,7 @@ PLANS: dict[str, dict] = {
     "free": _plan(
         "free",
         available=True,
+        price_cents_monthly=0,
         photos_per_month=50,
         videos_per_month=5,
         max_image_bytes=10 * _MB,
@@ -137,6 +144,7 @@ PLANS: dict[str, dict] = {
     "pro": _plan(
         "pro",
         available=False,  # coming soon — not purchasable yet
+        price_cents_monthly=1000,  # $10 / month
         photos_per_month=1000,
         videos_per_month=100,
         max_image_bytes=25 * _MB,
@@ -144,7 +152,7 @@ PLANS: dict[str, dict] = {
         max_video_seconds=300,
         uploads_per_hour=200,
         max_concurrent_jobs=3,
-        live_minutes_per_month=600,
+        live_minutes_per_month=300,
         live_session_max_seconds=1800,
     ),
 }

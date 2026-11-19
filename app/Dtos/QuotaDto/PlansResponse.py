@@ -7,6 +7,8 @@ class PlanInfo(BaseModel):
     """One plan in GET /api/plans — name, availability, then every limit field."""
     name: str
     available: bool
+    price_cents_monthly: int
+    currency: str
     photos_per_month: int
     videos_per_month: int
     max_image_bytes: int
